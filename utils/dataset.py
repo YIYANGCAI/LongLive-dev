@@ -76,7 +76,6 @@ class TwoTextDataset(Dataset):
             "idx": idx,
         }
 
-
 class MultiTextDataset(Dataset):
     """Dataset for multi-segment prompts stored in a JSONL file.
 
@@ -122,6 +121,22 @@ class MultiTextDataset(Dataset):
             "prompts_list": self.ds[idx][self.field],  # List[str]
         }
 
+# Add reference datasets (03-26)
+class ReferenceImageDataset(Dataset):
+    def __init__(self, meta_path, image_size=(480, 832)):
+        with open(meta_path) as f:
+            self.samples = [json.loads(l) for l in f]
+        self.image_size = image_size
+
+    def __len__(self): return len(self.samples)
+
+    def __getitem__(self, idx):
+        s = self.samples[idx]
+        img = Image.open(s["reference_image"]).convert("RGB")
+        img = img.resize((self.image_size[1], self.image_size[0]))
+        img_tensor = torch.from_numpy(np.array(img)).permute(2,0,1).float() / 127.5 - 1.0
+        return {"prompts": s["prompt"], "video_clip": s["video_clip"],
+                "reference_image": img_tensor, "idx": idx}
 
 def cycle(dl):
     while True:
