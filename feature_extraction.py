@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torchvision.io as tvio
 import torchvision.transforms.functional as TF
 from PIL import Image
@@ -70,22 +71,39 @@ def main():
     parser.add_argument("--video_frame", type=int, default=81)
     args = parser.parse_args()
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    # Distributed setup (only when launched via torchrun)
+    distributed = "RANK" in os.environ
+    if distributed:
+        dist.init_process_group(backend="nccl")
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        local_rank = int(os.environ["LOCAL_RANK"])
+    else:
+        rank, world_size, local_rank = 0, 1, 0
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    features_dir = os.path.join(args.output_dir, "features")
+    os.makedirs(features_dir, exist_ok=True)
+
+    device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        torch.cuda.set_device(device)
     vae = WanVAEWrapper().to(device)
 
     with open(args.meta_file) as f:
         samples = [json.loads(l) for l in f]
 
+    all_samples = samples  # keep full list for jsonl on rank 0
+    # Shard samples across ranks
+    samples = samples[rank::world_size]
+
     skipped = 0
-    for sample in tqdm(samples, desc="Encoding"):
+    for sample in tqdm(samples, desc=f"Encoding [rank {rank}]", disable=rank != 0):
         video_path = sample["video_clip"]
         ref_paths = sample["reference_image"]  # list of paths
         prompt = sample["prompt"]
 
         stem = Path(video_path).stem
-        out_path = os.path.join(args.output_dir, f"{stem}.pt")
+        out_path = os.path.join(features_dir, f"{stem}.pt")
         if os.path.exists(out_path):
             continue
 
@@ -113,12 +131,23 @@ def main():
         latents_ref = torch.cat(ref_latents, dim=1)
 
         torch.save({
-            "latent": latent.cpu(),          # [1, T, 16, h, w]
+            "latents": latent.cpu(),          # [1, T, 16, h, w]
             "latents_ref": latents_ref.cpu(), # [1, num_refs, 16, h, w]
             "prompt": prompt,
+            "video_path": video_path,
+            "ref_paths": ref_paths,
         }, out_path)
 
-    print(f"Done. Skipped {skipped} samples.")
+    if rank == 0:
+        print(f"Done. Skipped {skipped} samples.")
+        jsonl_path = os.path.join(args.output_dir, "data.jsonl")
+        with open(jsonl_path, "w") as f:
+            for sample in all_samples:
+                stem = Path(sample["video_clip"]).stem
+                entry = dict(sample, feature=os.path.join(features_dir, f"{stem}.pt"))
+                f.write(json.dumps(entry) + "\n")
+    if distributed:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

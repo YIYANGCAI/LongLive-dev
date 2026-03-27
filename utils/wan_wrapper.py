@@ -1,5 +1,6 @@
 # Adopted from https://github.com/guandeh17/Self-Forcing
 # SPDX-License-Identifier: Apache-2.0
+import os
 import types
 from typing import List, Optional
 import torch
@@ -13,6 +14,8 @@ from wan.modules.t5 import umt5_xxl
 from wan.modules.causal_model import CausalWanModel
 from wan.modules.causal_model_infinity import CausalWanModel as CausalWanModelInfinity
 
+WAN_PATH = "/aifs4su/caiyiyang/models/Wan2.1-T2V-1.3B"
+
 class WanTextEncoder(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -24,7 +27,7 @@ class WanTextEncoder(torch.nn.Module):
             device=torch.device('cpu')
         ).eval().requires_grad_(False)
         self.text_encoder.load_state_dict(
-            torch.load("wan_models/Wan2.1-T2V-1.3B/models_t5_umt5-xxl-enc-bf16.pth",
+            torch.load(os.path.join(WAN_PATH, "models_t5_umt5-xxl-enc-bf16.pth"),
                        map_location='cpu', weights_only=False)
         )
         
@@ -33,7 +36,7 @@ class WanTextEncoder(torch.nn.Module):
             self.text_encoder = self.text_encoder.cuda()
 
         self.tokenizer = HuggingfaceTokenizer(
-            name="wan_models/Wan2.1-T2V-1.3B/google/umt5-xxl/", seq_len=512, clean='whitespace')
+            name=os.path.join(WAN_PATH, "google/umt5-xxl/"), seq_len=512, clean='whitespace')
 
     @property
     def device(self):
@@ -73,9 +76,9 @@ class WanVAEWrapper(torch.nn.Module):
 
         # init model
         self.model = _video_vae(
-            pretrained_path="wan_models/Wan2.1-T2V-1.3B/Wan2.1_VAE.pth",
+            pretrained_path=os.path.join(WAN_PATH, "Wan2.1_VAE.pth"),
             z_dim=16,
-        ).eval().requires_grad_(False)
+        ).eval().requires_grad_(False).to(torch.bfloat16)
 
     def encode_to_latent(self, pixel: torch.Tensor) -> torch.Tensor:
         # pixel: [batch_size, num_channels, num_frames, height, width]
